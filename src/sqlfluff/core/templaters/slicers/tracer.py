@@ -641,30 +641,44 @@ class JinjaAnalyzer:
             "for",
             "if",
         ):
+            # Entering block. Append and return.
             self.stack.append(slice_idx)
-        elif block_type == "block_mid":
-            # Record potential forward jump over this block.
-            self.raw_slice_info[
-                self.raw_sliced[self.stack[-1]]
-            ].next_slice_indices.append(slice_idx)
-            self.stack.pop()
-            self.stack.append(slice_idx)
-        elif block_type == "block_end" and tag_name in (
-            "endfor",
-            "endif",
+            return None
+
+        if block_type not in ("block_mid", "block_end") or not self.stack:
+            return None
+
+        if block_type == "block_end":
+            # If we're inside a macro or call, then we shouldn't set anything
+            # so just abort here. Likewise if it's not an `endif` or `endfor`.
+            if tag_name not in ("endfor", "endif") or self.inside_set_macro_or_call:
+                return None
+
+        _idx: int = self.stack[-1]
+        _slice: RawFileSlice = self.raw_sliced[_idx]
+        _info: RawSliceInfo = self.raw_slice_info[_slice]
+
+        # Record potential forward jump over this block.
+        # NOTE: We only reach this point for appropriate mids and ends.
+        _info.next_slice_indices.append(slice_idx)
+        self.stack.pop()
+
+        if (
+            block_type == "block_end"
+            and tag_name in ("endfor", "endif")
+            and _slice.slice_type == "block_start"
+            and _slice.tag == "for"
         ):
-            if not self.inside_set_macro_or_call:
-                # Record potential forward jump over this block.
-                self.raw_slice_info[
-                    self.raw_sliced[self.stack[-1]]
-                ].next_slice_indices.append(slice_idx)
-                _slice = self.raw_sliced[self.stack[-1]]
-                if _slice.slice_type == "block_start" and _slice.tag == "for":
-                    # Record potential backward jump to the loop beginning.
-                    self.raw_slice_info[
-                        self.raw_sliced[slice_idx]
-                    ].next_slice_indices.append(self.stack[-1] + 1)
-                self.stack.pop()
+            # Record potential backward jump to the loop beginning.
+            self.raw_slice_info[self.raw_sliced[slice_idx]].next_slice_indices.append(
+                _idx + 1
+            )
+
+        if block_type == "block_mid":
+            # Mid blocks mean we're stepping back in. Append before return.
+            self.stack.append(slice_idx)
+
+        return None
 
     def handle_left_whitespace_stripping(self, token: str, block_idx: int) -> None:
         """If block open uses whitespace stripping, record it.
